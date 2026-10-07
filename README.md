@@ -200,19 +200,6 @@ r = fit_voigt(sp.x[m], to_absorbance(sp.y[m]), load_par0("Input/par0_test.txt"),
 print(r["total_area"], "+-", r["total_area_err"])
 ```
 
-## Notes on the MATLAB ports
-
-* `fit2voigt`, `fadf`, `voigt`, the 2020 deconvolution and `fft_ils` are reproduced
-  faithfully and give the same numbers (e.g. `fit2voigt` on `MP_spectrum_2.txt`
-  with `par0_test.txt`: area 0.175963).
-* `ils_conv.m` is ported as `ils.ils_conv_legacy` but is not used for fitting: its
-  kernel is centred on the first line rather than on zero, which shifts the
-  convolved lines (probably why it was commented out in `voigt.m`). The fitter uses
-  a correctly centred kernel instead.
-* The 2020 deconvolution is kept as the *Legacy* method, including its original
-  assumptions (one ILS sample per region sample; transmittance divided directly),
-  so old results can be reproduced.
-
 ## Self-test
 
 `python Voigt_GUI.py --selftest` checks the Faddeeva port against
