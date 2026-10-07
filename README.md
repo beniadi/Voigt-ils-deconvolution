@@ -1,7 +1,7 @@
 # Voigt Fit
 
 Voigt-profile fitting, instrument-line-shape (ILS) deconvolution, area
-comparison and **gas concentration retrieval (ppm)** for high-resolution
+comparison and gas concentration retrieval for high-resolution
 absorption spectra (e.g. FTIR spectra of N₂O in a multipass cell).
 
 The whole chain runs in one window: measured spectrum → integrated absorbance
