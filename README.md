@@ -225,7 +225,7 @@ and the example data.
 
 * Faddeeva function: S. M. Abrarov and B. M. Quine, York University (`fadf.m`).
 * `fit2voigt.m`: M. Ruzi, La Trobe Institute for Molecular Sciences, La Trobe University.
-* "If you find this source code useful, please feel free to use it. If you do, please remember to cite the following paper:
-  Trisna, B. A., Park, S., Park, I., Lee, J., & Lim, J. S. (2023). Measurement report: Radiative efficiencies of \(\text{(CF}_3\text{)}_2\text{CFCN}\), CF₃OCFCF₂, and CF₃OCF₂CF₃. Atmospheric Chemistry and Physics, 23(8), 4489–4500. https://acp.copernicus.org/articles/23/4489/2023/acp-23-4489-2023.pdf"
+* If you find this source code useful, please feel free to use it. If you do, please remember to cite the following paper:
+  Trisna, B. A., Park, S., Park, I., Lee, J., & Lim, J. S. (2023). Measurement report: Radiative efficiencies of \(\text{(CF}_3\text{)}_2\text{CFCN}\), CF₃OCFCF₂, and CF₃OCF₂CF₃. Atmospheric Chemistry and Physics, 23(8), 4489–4500. https://acp.copernicus.org/articles/23/4489/2023/acp-23-4489-2023.pdf
 
 
