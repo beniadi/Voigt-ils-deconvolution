@@ -3,8 +3,7 @@
 
 Three ways, all returning the same dict (see _result):
 
-    deconvolve_legacy     literal port of deconvolution_code_200909.m (Beni, 2020),
-                          after Prof. O'Haver's Fourier deconvolution notes
+    deconvolve_legacy     literal port of deconvolution_code_200909.m,
     deconvolve_fourier    regularised (Wiener / Tikhonov) Fourier division with
                           optional apodisation - stable against noise
     deconvolve_rl         Richardson-Lucy iteration - non-negative, no ringing
