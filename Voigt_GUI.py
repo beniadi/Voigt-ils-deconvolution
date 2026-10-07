@@ -65,7 +65,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
     QPushButton, QFileDialog, QGridLayout, QMenuBar, QAction, QMessageBox, QSpinBox, QComboBox,
     QCheckBox, QSizePolicy, QTabWidget, QTextEdit, QTableWidget, QTableWidgetItem, QListWidget,
     QListWidgetItem, QHeaderView, QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout,
-    QDoubleSpinBox, QInputDialog)
+    QDoubleSpinBox, QInputDialog, QLineEdit, QScrollArea)
 from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
 
@@ -83,6 +83,7 @@ import ils as ils_mod                                       # noqa: E402
 import voigt_fit as vfit                                    # noqa: E402
 import deconvolution as dcv                                 # noqa: E402
 import area_compare as acmp                                 # noqa: E402
+import concentration as conc                                # noqa: E402
 
 APP_TITLE = "Voigt Fit 1.0"
 WIN_W, WIN_H = 1440, 940
@@ -142,6 +143,13 @@ DEFAULTS = {
     # Gaussian width when the ILS is in the model: the instrument is already
     # accounted for, so what is left is the Doppler width of the molecule
     "ils_gauss": "doppler", "temp_K": 296.0, "mass_amu": 44.0,
+    # concentration (integrated Beer-Lambert + HITRAN line intensity)
+    "conc_area_source": "fit_analytic",
+    "conc_L_cm": 100.0, "conc_L_u": 0.0, "conc_T_K": 296.0, "conc_T_u": 0.0,
+    "conc_P": 1.0, "conc_P_unit": "atm", "conc_P_u": 0.0,
+    "conc_S_mode": "manual", "conc_S296": 1.0e-19, "conc_Elow": 0.0, "conc_v0": 0.0, "conc_S_u": 0.0,
+    "conc_q_mode": "linear", "conc_q_value": 1.0,
+    "conc_hitran_path": "", "conc_line_sel": "region", "conc_tol": 0.01, "conc_iso": "",
     # start-up
     "example_on_start": True,
     "settings_version": 2,
@@ -699,6 +707,8 @@ class VoigtWindow(QMainWindow):
         self._busy = False
         self._pick = False
         self._compare_rows = []
+        self._conc_rows = []
+        self._hitran = None            # (path, lines dict) of the loaded HITRAN line list
         self._build_menu_bar(); self._build_central()
         self._sync_region_spins()
         self._redraw()
@@ -775,6 +785,14 @@ class VoigtWindow(QMainWindow):
         a.setToolTip("Fit every spectrum with its own peak table (or the current one if empty).")
         a.triggered.connect(self.fit_all); cm.addAction(a)
         a = QAction("Export Comparison…", self); a.triggered.connect(self.export_comparison)
+        cm.addAction(a)
+        cm.addSeparator()
+        a = QAction("Compute Concentration (ppm)", self)
+        a.setToolTip("Area → number density → mixing ratio, with the cell and HITRAN\n"
+                     "parameters in the Concentration tab.")
+        a.triggered.connect(lambda: (self._tabs.setCurrentIndex(4), self.compute_concentration()))
+        cm.addAction(a)
+        a = QAction("Load HITRAN Line List…", self); a.triggered.connect(self.load_hitran_file)
         cm.addAction(a)
 
         hm = mb.addMenu("Help")
@@ -959,6 +977,7 @@ class VoigtWindow(QMainWindow):
         self._build_fit_tab(tabs)
         self._build_deconv_tab(tabs)
         self._build_compare_tab(tabs)
+        self._build_conc_tab(tabs)
         self._build_log_tab(tabs)
 
     def _build_peaks_tab(self, tabs):
@@ -1107,6 +1126,156 @@ class VoigtWindow(QMainWindow):
         b = QPushButton("Export CSV…"); b.setObjectName("secondary")
         b.clicked.connect(self.export_comparison); row.addWidget(b)
         v.addLayout(row)
+
+    def _build_conc_tab(self, tabs):
+        """Concentration from the area: ∫A dν (base e) = S(T)·N·L, N_total = P/(k_B T)."""
+        tab = QWidget(); tabs.addTab(tab, "Concentration")
+        outer = QVBoxLayout(tab); outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(scroll)
+        inner = QWidget(); scroll.setWidget(inner)
+        v = QVBoxLayout(inner); v.setContentsMargins(8, 10, 8, 8); v.setSpacing(8)
+        s = self._settings
+        hint = QLabel("∫A dν (base e) = S(T) · N · L  and  N<sub>total</sub> = P / (k<sub>B</sub>T)  →  "
+                      "ppm = 10⁶ · N / N<sub>total</sub>. Areas in log₁₀ are converted to ln automatically.")
+        hint.setProperty("muted", True); hint.setWordWrap(True); v.addWidget(hint)
+
+        def dspin(val, lo, hi, dec, step, suffix="", tip=""):
+            sp = QDoubleSpinBox(); sp.setRange(lo, hi); sp.setDecimals(dec); sp.setSingleStep(step)
+            sp.setValue(float(val))
+            if suffix: sp.setSuffix(suffix)
+            if tip: sp.setToolTip(tip)
+            return sp
+
+        def cap(text, tip=""):
+            c = QLabel(text); c.setProperty("muted", True)
+            if tip: c.setToolTip(tip)
+            return c
+
+        # -- cell
+        box = QGroupBox("Gas cell")
+        g = QGridLayout(box); g.setContentsMargins(12, 10, 12, 10); g.setHorizontalSpacing(8); g.setVerticalSpacing(6)
+        self.sp_L = dspin(s["conc_L_cm"], 1e-6, 1e9, 3, 1.0, " cm", "Optical path length (total, for a multipass cell).")
+        self.sp_L_u = dspin(s["conc_L_u"], 0, 100, 2, 0.1, " %", "Relative standard uncertainty of L.")
+        self.sp_T = dspin(s["conc_T_K"], 1, 5000, 2, 0.5, " K", "Gas temperature during the measurement.")
+        self.sp_T_u = dspin(s["conc_T_u"], 0, 500, 2, 0.1, " K", "Standard uncertainty of T (acts on S(T) and N_total).")
+        self.sp_P = dspin(s["conc_P"], 1e-9, 1e9, 5, 0.01, "", "Total pressure in the cell.")
+        self.combo_P_unit = QComboBox()
+        for u in conc.PRESSURE_UNITS: self.combo_P_unit.addItem(u, u)
+        self.combo_P_unit.setCurrentIndex(max(0, self.combo_P_unit.findData(s["conc_P_unit"])))
+        self.sp_P_u = dspin(s["conc_P_u"], 0, 100, 2, 0.1, " %", "Relative standard uncertainty of P.")
+        g.addWidget(cap("Path length L"), 0, 0); g.addWidget(self.sp_L, 0, 1, 1, 2)
+        g.addWidget(cap("±"), 0, 3); g.addWidget(self.sp_L_u, 0, 4)
+        g.addWidget(cap("Temperature T"), 1, 0); g.addWidget(self.sp_T, 1, 1, 1, 2)
+        g.addWidget(cap("±"), 1, 3); g.addWidget(self.sp_T_u, 1, 4)
+        g.addWidget(cap("Pressure P"), 2, 0); g.addWidget(self.sp_P, 2, 1); g.addWidget(self.combo_P_unit, 2, 2)
+        g.addWidget(cap("±"), 2, 3); g.addWidget(self.sp_P_u, 2, 4)
+        g.setColumnStretch(1, 1)
+        v.addWidget(box)
+
+        # -- line intensity
+        box = QGroupBox("Line intensity (HITRAN, at 296 K)")
+        g = QGridLayout(box); g.setContentsMargins(12, 10, 12, 10); g.setHorizontalSpacing(8); g.setVerticalSpacing(6)
+        self.combo_S_mode = QComboBox()
+        self.combo_S_mode.addItem("Enter S(296) by hand (sum over the lines in the area)", "manual")
+        self.combo_S_mode.addItem("From a HITRAN line list (.par / CSV)", "hitran")
+        self.combo_S_mode.setCurrentIndex(max(0, self.combo_S_mode.findData(s["conc_S_mode"])))
+        g.addWidget(cap("Source"), 0, 0); g.addWidget(self.combo_S_mode, 0, 1, 1, 4)
+        # manual
+        self.ed_S296 = QLineEdit("%.6g" % float(s["conc_S296"]))
+        self.ed_S296.setToolTip("S(296 K) in cm⁻¹/(molecule·cm⁻²) = cm/molecule, e.g. 1.35e-19.\n"
+                                "If the area covers several lines, enter the sum of their S.")
+        self.sp_Elow = dspin(s["conc_Elow"], 0, 1e5, 4, 1.0, " cm⁻¹",
+                             "Lower-state energy E\" of the line (for the temperature correction).\n"
+                             "Irrelevant when T = 296 K.")
+        self.sp_v0 = dspin(s["conc_v0"], 0, 1e6, 4, 1.0, " cm⁻¹",
+                           "Line position for the stimulated-emission term; 0 = centre of the region.")
+        self.lbl_S_manual = [cap("S(296)"), cap("E\""), cap("ν₀")]
+        g.addWidget(self.lbl_S_manual[0], 1, 0); g.addWidget(self.ed_S296, 1, 1, 1, 4)
+        g.addWidget(self.lbl_S_manual[1], 2, 0); g.addWidget(self.sp_Elow, 2, 1, 1, 2)
+        g.addWidget(self.lbl_S_manual[2], 2, 3); g.addWidget(self.sp_v0, 2, 4)
+        # HITRAN file
+        self.btn_hitran = QPushButton("Load HITRAN…"); self.btn_hitran.setObjectName("secondary")
+        self.btn_hitran.clicked.connect(self.load_hitran_file)
+        self.lbl_hitran = QLabel("no line list loaded"); self.lbl_hitran.setProperty("muted", True)
+        self.lbl_hitran.setWordWrap(True)
+        self.combo_line_sel = QComboBox()
+        self.combo_line_sel.addItem("All lines in the region", "region")
+        self.combo_line_sel.addItem("Lines matched to the fitted positions", "matched")
+        self.combo_line_sel.setToolTip("Region: sum S over every HITRAN line inside the region - use with\n"
+                                       "areas integrated over the region.\n"
+                                       "Matched: for each fitted line, the strongest HITRAN line within the\n"
+                                       "tolerance - use with the analytic area of the fitted lines.")
+        self.combo_line_sel.setCurrentIndex(max(0, self.combo_line_sel.findData(s["conc_line_sel"])))
+        self.sp_tol = dspin(s["conc_tol"], 1e-5, 1.0, 4, 0.005, " cm⁻¹", "Matching tolerance.")
+        self.ed_iso = QLineEdit(str(s["conc_iso"])); self.ed_iso.setPlaceholderText("all")
+        self.ed_iso.setToolTip("Isotopologue id (HITRAN local id, 1 = most abundant); empty = all.")
+        self.ed_iso.setMaximumWidth(70)
+        self.w_hitran = [self.btn_hitran, self.lbl_hitran, self.combo_line_sel, self.sp_tol, self.ed_iso]
+        self.lbl_hitran_caps = [cap("Lines"), cap("tol"), cap("iso")]
+        g.addWidget(self.btn_hitran, 3, 0); g.addWidget(self.lbl_hitran, 3, 1, 1, 4)
+        g.addWidget(self.lbl_hitran_caps[0], 4, 0); g.addWidget(self.combo_line_sel, 4, 1, 1, 2)
+        g.addWidget(self.lbl_hitran_caps[1], 4, 3); g.addWidget(self.sp_tol, 4, 4)
+        g.addWidget(self.lbl_hitran_caps[2], 5, 3); g.addWidget(self.ed_iso, 5, 4)
+        # common
+        self.combo_q = QComboBox()
+        self.combo_q.addItem("(296/T)¹ - linear molecule (N₂O, CO₂, CO)", "linear")
+        self.combo_q.addItem("(296/T)¹·⁵ - non-linear molecule (H₂O, CH₄)", "nonlinear")
+        self.combo_q.addItem("Enter Q(296)/Q(T)", "manual")
+        self.combo_q.setToolTip("Partition-function ratio for the temperature correction of S.\n"
+                                "For accurate work away from 296 K enter the ratio from the\n"
+                                "HITRAN partition-function (q) files.")
+        self.combo_q.setCurrentIndex(max(0, self.combo_q.findData(s["conc_q_mode"])))
+        self.sp_q = dspin(s["conc_q_value"], 1e-6, 1e6, 6, 0.01, "", "Q(296)/Q(T)")
+        self.sp_S_u = dspin(s["conc_S_u"], 0, 100, 2, 0.5, " %",
+                            "Relative uncertainty of S (HITRAN uncertainty code: 4 = 10-20 %, 5 = 5-10 %,\n"
+                            "6 = 2-5 %, 7 = 1-2 %, 8 = <1 %).")
+        g.addWidget(cap("Q(296)/Q(T)"), 6, 0); g.addWidget(self.combo_q, 6, 1, 1, 2); g.addWidget(self.sp_q, 6, 4)
+        g.addWidget(cap("u(S)"), 7, 0); g.addWidget(self.sp_S_u, 7, 1)
+        g.setColumnStretch(1, 1)
+        v.addWidget(box)
+        self.combo_S_mode.currentIndexChanged.connect(self._conc_mode_changed)
+        self.combo_q.currentIndexChanged.connect(self._conc_mode_changed)
+        self._conc_mode_changed()
+        for c in (self.combo_S_mode, self.combo_line_sel, self.combo_q):
+            c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            c.setMinimumContentsLength(12)
+
+        # -- area + results
+        row = QHBoxLayout()
+        row.addWidget(cap("Area"))
+        self.combo_conc_area = QComboBox()
+        for k, lab in AREA_SOURCES:
+            if k != "ew":                         # ∫(1−T) dν is not an absorbance
+                self.combo_conc_area.addItem(lab, k)
+        self.combo_conc_area.setCurrentIndex(max(0, self.combo_conc_area.findData(s["conc_area_source"])))
+        self.combo_conc_area.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_conc_area.setMinimumContentsLength(12)
+        row.addWidget(self.combo_conc_area, 1)
+        v.addLayout(row)
+        self.tbl_conc = QTableWidget(0, 5)
+        self.tbl_conc.setHorizontalHeaderLabels(["Spectrum", "∫A dν (ln)", "S(T)", "N (cm⁻³)", "ppm ± u"])
+        self._style_table(self.tbl_conc)
+        self.tbl_conc.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.tbl_conc.setMinimumHeight(110)
+        self.tbl_conc.currentCellChanged.connect(lambda r, *_: self._show_conc_detail(r))
+        v.addWidget(self.tbl_conc)
+        self.lbl_conc = QLabel("—"); self.lbl_conc.setWordWrap(True)
+        mono = QFont("Consolas"); mono.setPointSize(9); self.lbl_conc.setFont(mono)
+        self.lbl_conc.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        v.addWidget(self.lbl_conc)
+        row = QHBoxLayout()
+        b = QPushButton("Compute concentration"); b.clicked.connect(self.compute_concentration); row.addWidget(b)
+        b = QPushButton("Export CSV…"); b.setObjectName("secondary")
+        b.clicked.connect(self.export_concentration); row.addWidget(b)
+        v.addLayout(row)
+        v.addStretch(1)
+        if s["conc_hitran_path"] and os.path.isfile(s["conc_hitran_path"]):
+            try:
+                self._set_hitran(s["conc_hitran_path"], quiet=True)
+            except Exception:
+                pass
 
     def _build_log_tab(self, tabs):
         tab_log = QWidget(); tabs.addTab(tab_log, "Log")
@@ -1879,6 +2048,190 @@ class VoigtWindow(QMainWindow):
         self._remember_dir("last_save_dir", path)
         self.log("saved %s" % path)
 
+    # -- concentration -------------------------------------------------------
+    def _conc_mode_changed(self, *_):
+        hitran = self.combo_S_mode.currentData() == "hitran"
+        for w in [self.ed_S296, self.sp_Elow, self.sp_v0] + self.lbl_S_manual:
+            w.setVisible(not hitran)
+        for w in self.w_hitran + self.lbl_hitran_caps:
+            w.setVisible(hitran)
+        self.sp_q.setEnabled(self.combo_q.currentData() == "manual")
+
+    def load_hitran_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load HITRAN line list", self._settings.get("last_open_dir") or HERE,
+                                              "HITRAN (*.par *.data *.csv *.txt *.out);;All files (*)")
+        if not path:
+            return
+        try:
+            self._set_hitran(path)
+        except Exception as e:
+            QMessageBox.warning(self, "HITRAN", "Could not read %s:\n%s" % (os.path.basename(path), e)); return
+        self._remember_dir("last_open_dir", path)
+
+    def _set_hitran(self, path, quiet=False):
+        lines = conc.load_hitran(path)
+        self._hitran = (path, lines)
+        self._settings["conc_hitran_path"] = path
+        self.lbl_hitran.setText("%s: %d lines, %.4f–%.4f cm⁻¹" % (
+            os.path.basename(path), len(lines["nu"]), lines["nu"].min(), lines["nu"].max()))
+        self.combo_S_mode.setCurrentIndex(self.combo_S_mode.findData("hitran"))
+        if not quiet:
+            self.log("HITRAN line list %s: %d lines" % (path, len(lines["nu"])))
+
+    def _conc_read(self):
+        """Widgets -> settings; returns the settings dict."""
+        s = self._settings
+        try:
+            S296 = float(self.ed_S296.text().replace(",", "."))
+        except ValueError:
+            raise ValueError("S(296) '%s' is not a number (e.g. 1.35e-19)" % self.ed_S296.text())
+        s.update({"conc_area_source": self.combo_conc_area.currentData(),
+                  "conc_L_cm": self.sp_L.value(), "conc_L_u": self.sp_L_u.value(),
+                  "conc_T_K": self.sp_T.value(), "conc_T_u": self.sp_T_u.value(),
+                  "conc_P": self.sp_P.value(), "conc_P_unit": self.combo_P_unit.currentData(),
+                  "conc_P_u": self.sp_P_u.value(),
+                  "conc_S_mode": self.combo_S_mode.currentData(), "conc_S296": S296,
+                  "conc_Elow": self.sp_Elow.value(), "conc_v0": self.sp_v0.value(), "conc_S_u": self.sp_S_u.value(),
+                  "conc_q_mode": self.combo_q.currentData(), "conc_q_value": self.sp_q.value(),
+                  "conc_line_sel": self.combo_line_sel.currentData(), "conc_tol": self.sp_tol.value(),
+                  "conc_iso": self.ed_iso.text().strip()})
+        return s
+
+    def _conc_strength(self, st, s):
+        """(S_of_T callable, description, lines used) for one spectrum."""
+        region = self.region()
+
+        def qr(T):
+            return conc.q_ratio(T, s["conc_q_mode"], s["conc_q_value"])
+
+        if s["conc_S_mode"] == "manual":
+            v0 = s["conc_v0"] or (0.5 * sum(region) if region else float(np.mean(st.spec.x)))
+            S296, El = s["conc_S296"], s["conc_Elow"]
+            return (lambda T: float(conc.line_strength_T(S296, El, v0, T, qr(T))),
+                    "S(296) %.4g, E\" %.4g cm⁻¹, ν₀ %.4f cm⁻¹" % (S296, El, v0), None)
+        if self._hitran is None:
+            raise ValueError("load a HITRAN line list first (or enter S(296) by hand)")
+        lines = self._hitran[1]
+        lo, hi = region if region else (float(st.spec.x.min()), float(st.spec.x.max()))
+        how = s["conc_line_sel"]
+        if how == "matched" and st.fit is not None:
+            pos = st.fit["par"][0]
+            idx = conc.select_lines(lines, positions=pos, tol=s["conc_tol"], iso=s["conc_iso"] or None)
+            desc = "%d HITRAN line(s) matched to %d fitted line(s) (±%.3g cm⁻¹)" % (len(idx), len(pos), s["conc_tol"])
+        else:
+            idx = conc.select_lines(lines, lo, hi, iso=s["conc_iso"] or None)
+            desc = "%d HITRAN line(s) in %.4f–%.4f cm⁻¹" % (len(idx), lo, hi)
+            if how == "matched":
+                desc += " (not fitted - used the region)"
+        if len(idx) == 0:
+            raise ValueError("no HITRAN lines selected for %s - check the region, tolerance and isotopologue" % st.name)
+        nu, sw, el = lines["nu"][idx], lines["sw"][idx], lines["elower"][idx]
+        return (lambda T: float(np.sum(conc.line_strength_T(sw, el, nu, T, qr(T)))), desc,
+                list(zip(nu.tolist(), sw.tolist(), el.tolist())))
+
+    def compute_concentration(self, quiet=False):
+        try:
+            s = self._conc_read()
+        except ValueError as e:
+            QMessageBox.warning(self, "Concentration", str(e)); return
+        states = [st for st in self._states if st.include]
+        if not states:
+            if not quiet:
+                QMessageBox.information(self, "Concentration", "Open (and tick) at least one spectrum.")
+            return
+        src = s["conc_area_source"]; base = str(s["base"])
+        T, L = s["conc_T_K"], s["conc_L_cm"]
+        P_pa = s["conc_P"] * conc.PRESSURE_UNITS[s["conc_P_unit"]]
+        rel_u = {"S": s["conc_S_u"] / 100, "L": s["conc_L_u"] / 100, "P": s["conc_P_u"] / 100, "T_K": s["conc_T_u"]}
+        rows, errors = [], []
+        for st in states:
+            a, u, note = self._area_of(st, src)
+            row = {"name": st.name, "source": src, "note": note, "base": base, "area": a, "area_err": u,
+                   "L_cm": L, "T_K": T, "P_Pa": P_pa}
+            if a is None or math.isnan(a):
+                row["error"] = note; rows.append(row); continue
+            try:
+                S_of_T, desc, used = self._conc_strength(st, s)
+            except ValueError as e:
+                row["error"] = str(e); errors.append(str(e)); rows.append(row); continue
+            a_e = conc.to_base_e(a, base)
+            u_e = conc.to_base_e(u, base) if u else None
+            S_T = S_of_T(T)
+            r = conc.concentration(a_e, S_T, L, T, P_pa, u_e, rel_u, S_of_T)
+            row.update({"area_e": a_e, "area_e_err": u_e, "S_296": S_of_T(conc.T_REF), "S_T": S_T,
+                        "lines": desc, "N": r["N"], "N_total": r["N_total"], "column": r["column"],
+                        "vmr": r["vmr"], "ppm": r["ppm"], "ppm_err": r["ppm_err"],
+                        "budget": r["budget"], "lines_used": used})
+            if st.fit is not None:
+                row["r2"] = st.fit["r2"]
+            rows.append(row)
+        self._conc_rows = rows
+        t = self.tbl_conc; t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            t.setItem(i, 0, self._cell(r["name"], Qt.AlignLeft | Qt.AlignVCenter))
+            if "ppm" in r:
+                t.setItem(i, 1, self._cell(fmt(r["area_e"], r["area_e_err"], 5)))
+                t.setItem(i, 2, self._cell("%.4e" % r["S_T"]))
+                t.setItem(i, 3, self._cell("%.4e" % r["N"]))
+                t.setItem(i, 4, self._cell(fmt(r["ppm"], r["ppm_err"], 5)))
+            else:
+                for c in range(1, 5): t.setItem(i, c, self._cell("—"))
+                t.item(i, 4).setToolTip(r.get("error", ""))
+        cur = next((i for i, st in enumerate(states) if st is self.current()), 0)
+        t.setCurrentCell(cur, 0); self._show_conc_detail(cur)
+        if errors and not quiet:
+            QMessageBox.warning(self, "Concentration", "\n".join(dict.fromkeys(errors)))
+        ok = [r for r in rows if "ppm" in r]
+        if ok:
+            self.log("concentration (%s, base %s, L %.4g cm, T %.2f K, P %.6g Pa): %s" % (
+                dict(AREA_SOURCES)[src], base, L, T, P_pa,
+                "; ".join("%s %s ppm" % (r["name"], fmt(r["ppm"], r["ppm_err"], 5)) for r in ok)))
+
+    def _show_conc_detail(self, i):
+        if not (0 <= i < len(self._conc_rows)):
+            self.lbl_conc.setText("—"); return
+        r = self._conc_rows[i]
+        if "ppm" not in r:
+            self.lbl_conc.setText("%s: %s" % (r["name"], r.get("error", "no area"))); return
+        conv = "  (log₁₀ area %.6g × ln 10)" % r["area"] if str(r["base"]) == "10" else ""
+        lines = ["%s" % r["name"],
+                 "∫A dν (ln)   %s cm⁻¹%s" % (fmt(r["area_e"], r["area_e_err"], 6), conv),
+                 "lines        %s" % r["lines"],
+                 "S(296)       %.5e   S(T) %.5e cm/molecule" % (r["S_296"], r["S_T"]),
+                 "N target     %.5e molecule/cm³   column N·L %.5e molecule/cm²" % (r["N"], r["column"]),
+                 "N total      %.5e molecule/cm³   (P/k_B T)" % r["N_total"],
+                 "VMR          %.6e   =  %s ppm   =  %s ppb" % (
+                     r["vmr"], fmt(r["ppm"], r["ppm_err"], 6), fmt(r["ppm"] * 1e3, (r["ppm_err"] or 0) * 1e3 or None, 6))]
+        if r["budget"]:
+            lines.append("u budget     " + "  ".join("%s %.3g" % (k, v) for k, v in r["budget"].items()) + "  (ppm)")
+        if r.get("r2") is not None and r["source"].startswith("fit"):
+            lines.append("fit R²       %.5f%s" % (r["r2"], "" if r["r2"] > 0.99 else "   - below 0.99: check the residual"))
+        if r["source"] == "fit_analytic" and self._settings["conc_S_mode"] == "hitran" \
+                and self._settings["conc_line_sel"] == "region":
+            lines.append("note         the analytic area covers the fitted lines only - 'matched' selection "
+                         "avoids counting unfitted HITRAN lines")
+        self.lbl_conc.setText("\n".join(lines))
+
+    def export_concentration(self):
+        if not self._conc_rows:
+            self.compute_concentration()
+        if not self._conc_rows:
+            return
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path, _ = QFileDialog.getSaveFileName(self, "Export concentration", os.path.join(
+            self._settings.get("last_save_dir") or results_dir(), "concentration_%s.csv" % stamp), "CSV (*.csv)")
+        if not path:
+            return
+        rows = []
+        for r in self._conc_rows:
+            rr = {k: v for k, v in r.items() if k not in ("budget", "lines_used")}
+            for k, v in (r.get("budget") or {}).items():
+                rr["u_ppm_%s" % k] = v
+            rows.append(rr)
+        acmp.write_csv(path, rows)
+        self._remember_dir("last_save_dir", path)
+        self.log("saved %s" % path)
+
     # -- drawing -------------------------------------------------------------
     def _redraw(self, keep_view=False):
         st = self.current()
@@ -2140,6 +2493,13 @@ def self_test(verbose=True):
         out["doppler_synth"] = (float(_trapz(vc.voigt(xf, tr), xf)),
                                 float(_trapz(rs["intrinsic_fine"], rs["x_fine"])), ds["area_deconv"])
 
+    # 6. concentration: a synthetic cell of known mixing ratio, area -> ppm back
+    S296, El, v0, Tc, Lc, Pc, ppm_true = 1.35e-19, 50.0, 2217.0, 310.0, 200.0, 101325.0, 0.33
+    S_T = float(conc.line_strength_T(S296, El, v0, Tc, conc.q_ratio(Tc, "linear")))
+    area_e = S_T * ppm_true * 1e-6 * conc.number_density_total(Pc, Tc) * Lc
+    rc = conc.concentration(conc.to_base_e(area_e / conc.LN10, "10"), S_T, Lc, Tc, Pc)
+    out["conc"] = (rc["ppm"], ppm_true, S_T / S296)
+
     if verbose:
         print("Faddeeva port vs scipy wofz   max rel err %.2e" % out["fadf_err"])
         print("analytic Voigt area           rel err %.2e  (Lorentz wings beyond the +-20 cm-1"
@@ -2166,6 +2526,8 @@ def self_test(verbose=True):
             tt, fa, da = out["doppler_synth"]
             print("Doppler-limited synthetic     true %.5f   fit %.5f (%+.2f %%)   direct %.5f (%+.2f %%)"
                   % (tt, fa, 100 * (fa - tt) / tt, da, 100 * (da - tt) / tt))
+        pc, pt, sr = out["conc"]
+        print("concentration round trip      %.6f ppm  (true %.6f; S(310 K)/S(296 K) = %.4f)" % (pc, pt, sr))
     return out
 
 
