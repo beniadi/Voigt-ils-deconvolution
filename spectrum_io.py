@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """Reading and writing spectra, instrument line shapes and par0 files.
 
-What the MATLAB scripts did with load('...txt') happens here, plus a reader for
-the Bruker OPUS binary files (*.dpt / *.0 / *.1 ...) the spectra were exported
-from, so they no longer have to go through a text export first.
+Two-column text files, plus a reader for the Bruker OPUS binary files
+(*.dpt / *.0 / *.1 ...) the spectra were exported from, so they do not have
+to go through a text export first.
 
     load_spectrum(path)       -> Spectrum(x, y, name, path, kind)
     load_ils(path)            -> (offset_cm1, ils)   two columns, e.g. ILS_LINEFIT.txt
     load_linefit_params(path) -> (modulation, phase)  LINEFIT ilsparms.dat
-    load_par0(path) / save_par0(path, par0)            the 4 x g MATLAB par0 text format
+    load_par0(path) / save_par0(path, par0)            the 4 x g par0 text format
     to_absorbance / to_transmittance                   with a selectable log base
 """
 
@@ -34,8 +34,8 @@ class Spectrum:
 # Absorbance <-> transmittance
 # =============================================================================
 def to_absorbance(T, base="10"):
-    """A = log_base(1/T).  voigtfit_test.m uses log10; the 2020 deconvolution
-    script uses the natural log - so the base is a choice, not a constant."""
+    """A = log_base(1/T).  The default is log10; the legacy 2020
+    deconvolution uses the natural log - so the base is a choice, not a constant."""
     T = np.clip(np.asarray(T, dtype=float), 1e-12, None)
     return -np.log10(T) if str(base) == "10" else -np.log(T)
 
@@ -95,7 +95,7 @@ def is_opus(path):
 def load_spectrum(path, kind="auto", block=None):
     """Spectrum from a two-column text file or a Bruker OPUS binary file.
 
-    The x axis is sorted increasing (fit2voigt.m did the same) and duplicate
+    The x axis is sorted increasing (as fit2voigt does) and duplicate
     points are dropped.  kind = "auto" guesses transmittance/absorbance.
     """
     meta = {}
@@ -208,7 +208,7 @@ def load_linefit_params(path):
 
 
 # =============================================================================
-# par0 - the MATLAB initial-parameter file
+# par0 - the initial-parameter file
 # =============================================================================
 def load_par0(path):
     """4 x g matrix: positions, intensities, Gaussian widths, Lorentzian widths."""

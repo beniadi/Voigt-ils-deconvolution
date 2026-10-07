@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Least-squares Voigt fitting, with or without the instrument line shape.
 
-Port of fit2voigt.m (Mahmut Ruzi, La Trobe University, 2016) and of the
-fitting half of voigtfit_test.m, extended with the things the GUI needs:
+Based on fit2voigt (Mahmut Ruzi, La Trobe University, 2016), extended with
+the things the GUI needs:
 
-    fit2voigt(dat, par0, ...)   the MATLAB call, same bounds, same answer
+    fit2voigt(dat, par0, ...)   the original fit, with its fixed bounds
     fit_voigt(x, A, par0, opts) the general fitter:
         * the model may be convolved with a supplied ILS before it is
           compared to the data, so the fitted parameters describe the TRUE
@@ -32,15 +32,15 @@ import ils as ils_mod
 _trapz = getattr(np, "trapezoid", None) or np.trapz
 
 DEFAULT_FIT_OPTIONS = {
-    "g_bounds": (0.0104, 0.0105),     # Gaussian HWHM range, cm-1 (fit2voigt.m)
-    "l_bounds": (0.0, 0.5),           # Lorentzian HWHM range, cm-1 (fit2voigt.m)
+    "g_bounds": (0.0104, 0.0105),     # Gaussian HWHM range, cm-1 (fit2voigt)
+    "l_bounds": (0.0, 0.5),           # Lorentzian HWHM range, cm-1 (fit2voigt)
     "s_bounds": (0.0, np.inf),        # intensity
-    "pos_mode": "range",              # "range": anywhere in the data (fit2voigt.m)
+    "pos_mode": "range",              # "range": anywhere in the data (fit2voigt)
     "pos_window": 0.05,               # "window": +- this around the start value
     "fix_pos": False, "fix_g": False, "fix_l": False,
     "baseline": "none",               # "none" | "constant" | "linear"
     "use_ils": False,
-    "conv_domain": "transmittance",   # "transmittance" (exact) | "absorbance" (fadderiv.m)
+    "conv_domain": "transmittance",   # "transmittance" (exact) | "absorbance" (weak-line approx.)
     "base": "10",                     # absorbance log base
     "max_nfev_per_param": 150,        # maxfunevals = 150*numel(par0)
     "loss": "linear",
@@ -55,14 +55,13 @@ DEFAULT_FIT_OPTIONS = {
 
 
 # =============================================================================
-# fit2voigt.m - literal port
+# fit2voigt - the original fit
 # =============================================================================
 def fit2voigt(dat, par0, Gb=(0.0104, 0.0105), Lb=(0.0, 0.5), verbose=0):
     """[parmin, resnom, res, exitflag] = fit2voigt(dat, par0).
 
     dat is N x 2 (wavenumber, absorbance).  Positions are bounded by the data
-    range, intensities by [0, inf), widths by Gb and Lb.  res = model - data,
-    as in the MATLAB code.
+    range, intensities by [0, inf), widths by Gb and Lb.  res = model - data.
     """
     dat = np.asarray(dat, float)
     dat = dat[np.argsort(dat[:, 0])]

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Port of voigtfit_test.m - fit par0_test.txt to MP_spectrum_2.txt and plot.
+"""Fit par0_test.txt to MP_spectrum_2.txt and plot.
 
     python voigtfit_test.py [spectrum.txt] [par0.txt]
 
-Defaults to the files in "Input".  Uses fit2voigt
-exactly as the MATLAB script did (whole spectrum, fit2voigt.m bounds).
+Defaults to the files in "Input".  Uses fit2voigt over the whole spectrum,
+with its fixed width bounds.
 """
 
 import os

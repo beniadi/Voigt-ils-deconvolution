@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """Voigt line shape - the Faddeeva function and the multi-line Voigt profile.
 
-Python port of three files of the original MATLAB code:
+    fadf         the complex error function w(z) by Abrarov & Quine
+    voigt        vf = voigt(v, par0), the sum of g Voigt lines
+    fadderiv     the same sum, but each line convolved with the ILS first
 
-    fadf.m       the complex error function w(z) by Abrarov & Quine
-    voigt.m      vf = voigt(v, par0), the sum of g Voigt lines
-    fadderiv.m   the same sum, but each line convolved with the ILS first
-
-PARAMETER CONVENTION (identical to the MATLAB code)
----------------------------------------------------
+PARAMETER CONVENTION
+--------------------
 par0 is a 4 x g matrix, one column per line:
 
     row 0   v0   peak position           (cm-1)
@@ -23,7 +21,7 @@ and one line is
 so with aL -> 0 it is a Gaussian of HWHM aG and peak height s.  Its integral
 over v is closed-form (see voigt_area): s * sqrt(pi) * aG / sqrt(ln 2).
 
-The Faddeeva routine here is a line-by-line port of fadf.m.  scipy.special.wofz
+The Faddeeva routine here is Abrarov & Quine's algorithm.  scipy.special.wofz
 is used instead when FADDEEVA_BACKEND = "scipy"; the self-test in voigt_fit.py
 checks the two agree to ~1e-13.
 """
@@ -33,13 +31,13 @@ import numpy as np
 SQRT_LN2 = np.sqrt(np.log(2.0))
 SQRT_PI = np.sqrt(np.pi)
 
-# "abrarov" = port of fadf.m (default, identical to the MATLAB results);
+# "abrarov" = Abrarov & Quine's algorithm (default);
 # "scipy"   = scipy.special.wofz (Faddeeva package, slightly faster).
 FADDEEVA_BACKEND = "abrarov"
 
 
 # =============================================================================
-# fadf.m - the Faddeeva function w(z) = exp(-z^2) erfc(-i z)
+# fadf - the Faddeeva function w(z) = exp(-z^2) erfc(-i z)
 # =============================================================================
 def _fexp(z, tauM=12.0, maxN=23):
     """Fourier expansion approximation (internal area |z| <= 8)."""
@@ -104,7 +102,7 @@ def _smallim(z):
 
 
 def fadf(z):
-    """Faddeeva function w(z), any shape, complex input.  Port of fadf.m."""
+    """Faddeeva function w(z), any shape, complex input (Abrarov & Quine)."""
     z = np.array(z, dtype=complex, copy=True)
     shape = z.shape
     z = z.ravel()
@@ -128,11 +126,11 @@ def fadf(z):
 
 
 # =============================================================================
-# voigt.m - the multi-line Voigt profile
+# voigt - the multi-line Voigt profile
 # =============================================================================
 def as_par(par0):
     """par0 as a float 4 x g array (a flat vector of 4*g is accepted too,
-    in MATLAB's column-major order: v1 s1 aG1 aL1 v2 s2 ...)."""
+    in column-major order: v1 s1 aG1 aL1 v2 s2 ...)."""
     p = np.asarray(par0, dtype=float)
     if p.ndim == 1:
         p = p.reshape(-1, 4).T

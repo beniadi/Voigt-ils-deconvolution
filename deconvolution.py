@@ -3,7 +3,7 @@
 
 Three ways, all returning the same dict (see _result):
 
-    deconvolve_legacy     literal port of deconvolution_code_200909.m,
+    deconvolve_legacy     the 2020 deconvolution algorithm, unchanged,
     deconvolve_fourier    regularised (Wiener / Tikhonov) Fourier division with
                           optional apodisation - stable against noise
     deconvolve_rl         Richardson-Lucy iteration - non-negative, no ringing
@@ -165,10 +165,10 @@ def deconvolve_rl(x, T, ils, region=None, rl_iter=60, oversample=1, base="10",
 
 
 # =============================================================================
-# deconvolution_code_200909.m - literal port
+# The 2020 deconvolution algorithm
 # =============================================================================
 def deconvolve_legacy(vm, sm_y, ils_y, region=(2225.3, 2225.55), base="e", **_):
-    """Port of deconvolution_code_200909.m, step by step, MATLAB names kept.
+    """The 2020 deconvolution algorithm, step by step, original names kept.
 
     Faithful to the original, including its assumptions: the ILS samples are
     laid on the region with one ILS sample per region sample (the ILS's own
@@ -202,7 +202,7 @@ def deconvolve_legacy(vm, sm_y, ils_y, region=(2225.3, 2225.55), base="e", **_):
         deconv_func2 = (sm_ift / ILS_y_ift) * np.sum(sm_ift_fft)
     deconv_func2 = np.nan_to_num(deconv_func2)
 
-    # fft([deconv_func2; zeros(x,1)], x): MATLAB truncates back to x points
+    # zero-pad to 2x, then truncate back to x points before the FFT
     S0 = np.fft.fft(np.r_[deconv_func2, np.zeros(x)][:x])
     S0 = 1 + np.fft.fftshift(S0)
     with np.errstate(divide="ignore", invalid="ignore"):

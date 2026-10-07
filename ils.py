@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """Instrument line shape (ILS): building it, sampling it, convolving with it.
 
-Ports of the MATLAB pieces that touch the ILS:
+The original routines, kept for reference:
 
-    ils_conv.m    -> ils_conv_legacy      (kept for reference, see its note)
-    fadderiv.m    -> fadderiv_legacy      Voigt lines each convolved by ils_conv
-    fft_ils.m     -> ils_from_linefit_params_legacy
+    ils_conv_legacy                   (not used, see its note)
+    fadderiv_legacy                   Voigt lines each convolved by ils_conv_legacy
+    ils_from_linefit_params_legacy    ILS from LINEFIT parameters, original version
 
 and the versions the GUI actually uses:
 
@@ -19,7 +19,7 @@ and the versions the GUI actually uses:
 THE CONVOLUTION DOMAIN
 ----------------------
 An FTS records T_meas = T_true (*) ILS - the convolution acts on the
-TRANSMITTANCE.  Convolving the absorbance instead (what fadderiv.m does) is
+TRANSMITTANCE.  Convolving the absorbance instead (what fadderiv_legacy does) is
 the weak-line approximation; it is offered as an option because it is linear
 and fast, but for lines deeper than ~10 % absorption use transmittance.
 """
@@ -142,8 +142,8 @@ def ils_from_linefit_params(modulation, phase, mopd_cm, half_width=0.25, dnu=Non
 
 
 def ils_from_linefit_params_legacy(modulation, phase):
-    """Literal port of fft_ils.m (an exploratory script; the frequency axis
-    scale 10/(180/19) is the script's own).  Returns (f, real(ils))."""
+    """The original exploratory ILS-from-LINEFIT routine (the frequency axis
+    scale 10/(180/19) is its own).  Returns (f, real(ils))."""
     I1, I2 = np.asarray(modulation, float), np.asarray(phase, float)
     Ioldx = np.arange(1, 21, 1.0)[:len(I1)]
     Inewx = np.arange(1, 20.0001, 0.1)
@@ -179,10 +179,10 @@ def ils_stats(x, y):
 
 
 # =============================================================================
-# Literal ports of ils_conv.m and fadderiv.m
+# The original ils_conv and fadderiv
 # =============================================================================
-def _matlab_conv_same(u, v):
-    """MATLAB conv(u, v, 'same'): the central len(u) points of the full
+def _conv_same(u, v):
+    """conv(u, v, 'same'): the central len(u) points of the full
     convolution, starting at floor(len(v)/2)."""
     full = np.convolve(u, v)
     s = len(v) // 2
@@ -190,14 +190,14 @@ def _matlab_conv_same(u, v):
 
 
 def ils_conv_legacy(vv0, v0, w, ils_x, ils_y):
-    """Port of ils_conv.m.
+    """The original ils_conv.
 
     NOTE kept for fidelity, not used by the fitter.  The kernel is the ILS
     sampled at the data offsets from the FIRST line (vv0(:,1) through linear
     indexing), padded by 50 samples each side - so it is centred where that
     line sits in the window, not at its own middle, and every convolved line
     comes out shifted unless line 1 is at the centre of the window.  That is
-    presumably why voigt.m has the call commented out.  The fitter uses
+    presumably why the original voigt routine never called it.  The fitter uses
     ils_kernel + convolve, which centre the kernel properly.
     """
     vv0 = np.asarray(vv0, float)
@@ -213,12 +213,12 @@ def ils_conv_legacy(vv0, v0, w, ils_x, ils_y):
     ker[(vv01 < ils_x[0]) | (vv01 > ils_x[-1])] = 0.0
     out = np.zeros((N, len(np.atleast_1d(v0))))
     for i in range(out.shape[1]):
-        out[:, i] = _matlab_conv_same(np.real(w[:, i]), ker)
+        out[:, i] = _conv_same(np.real(w[:, i]), ker)
     return out
 
 
 def fadderiv_legacy(v, par0, ils_x, ils_y):
-    """Port of fadderiv.m: vf = sum_i s_i * conv(Re w_i, ILS) via ils_conv."""
+    """The original fadderiv: vf = sum_i s_i * conv(Re w_i, ILS) via ils_conv."""
     v = np.asarray(v, float).ravel()
     p = as_par(par0)
     v0, s, ag, al = p

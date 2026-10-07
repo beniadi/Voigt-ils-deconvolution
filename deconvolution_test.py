@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Port of deconvolution_code_200909.m - the six-panel figure.
+"""The 2020 deconvolution of an N2O line - the six-panel figure.
 
     python deconvolution_test.py [spectrum.txt] [ILS.txt] [lo hi]
 

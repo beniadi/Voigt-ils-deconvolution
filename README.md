@@ -1,13 +1,8 @@
 # Voigt Fit
 
-Voigt-profile fitting, instrument-line-shape (ILS) deconvolution, area
-comparison and gas concentration retrieval for high-resolution
-absorption spectra (e.g. FTIR spectra of N₂O in a multipass cell).
-
-The whole chain runs in one window: measured spectrum → integrated absorbance
-∫A dν with the ILS removed → number density → mixing ratio in ppm. The last
-step uses HITRAN line intensities and the cell's path length, temperature and
-pressure.
+Voigt-profile fitting, instrument-line-shape (ILS) deconvolution and area
+comparison for high-resolution absorption spectra (e.g. FTIR spectra of N₂O
+in a multipass cell).
 
 The instrument line shape is removed in two independent ways, and their
 agreement is reported:
@@ -34,49 +29,25 @@ equivalent-width self-check and the fit-vs-direct agreement:
 The *Compare* tab integrates the area of every loaded spectrum and reports ratios
 and differences to a reference.
 
-The *Concentration* tab turns the area into a concentration with the integrated
-Beer–Lambert law and the ideal-gas law:
-
-    ∫A dν (base e) = S(T) · N · L          N_total = P / (k_B T)          ppm = 10⁶ · N / N_total
-
-Enter the cell's path length L, temperature T and pressure P, and the HITRAN
-line intensity S(296 K), either typed in or summed from a HITRAN line list. For
-each spectrum the tab reports the area in base e, S(T), the number density N,
-the column N·L, the volume mixing ratio and ppm ± u, with an uncertainty budget
-(area, S, L, P, T).
-
-## Concentration in short
-
-| Input | Where it comes from |
-|---|---|
-| ∫A dν | The fitted (Voigt * ILS) or deconvolved area. A log₁₀ area is multiplied by ln 10 automatically. |
-| S(296 K) | HITRAN, in cm⁻¹/(molecule·cm⁻²). Typed in (the sum over the lines in the area) or read from a `.par`/CSV line list. |
-| S(T) | S(296 K) corrected with the lower-state energy E″, stimulated emission and Q(296)/Q(T). Q comes from a power law (296/T)ⁿ (n = 1 linear, 1.5 non-linear) or from your own ratio out of the HITRAN q-files. |
-| L, T, P | The cell: path length (cm), gas temperature (K), total pressure (atm, hPa, mbar, Torr, kPa or Pa). |
-
-Worked example, with illustrative cell values (L = 200 cm, S = 1.35 × 10⁻¹⁹
-cm/molecule, 296 K, 1 atm): the fitted total area 0.21637 (log₁₀) = 0.4982 (ln)
-gives **744.2 ± 1.6 ppm**. The direct-deconvolution area gives 712.4 ppm.
-
-Check the result before trusting it:
+Check a result before trusting it:
 
 * R² > 0.99 and a flat residual;
 * fit and direct deconvolution within a few per cent;
+* no fit parameter on its limit;
 * a peak at least ~3× the baseline noise.
 
 ## What it can do
 
 | Task | How |
 |---|---|
-| **Read spectra** | Two-column text (MATLAB exports, HITRAN simulations, CSV) **and Bruker OPUS binary files** (`.dpt`, `.0`, `.1`, …) directly. Transmittance or absorbance, guessed per file and switchable. Any number of spectra at once. |
-| **Fit Voigt lines** | Sum of Voigt profiles fitted by trust-region-reflective least squares (the algorithm `fit2voigt.m` used with `lsqnonlin`). Bounds on the Gaussian and Lorentzian widths, optional fixed positions/widths, optional constant or linear baseline, robust loss functions. |
-| **Starting lines** | Load a MATLAB `par0` file, detect peaks automatically, or click on the plot to add lines. Edit them in a table; save them back as `par0`. |
+| **Read spectra** | Two-column text (whitespace- or comma-separated) **and Bruker OPUS binary files** (`.dpt`, `.0`, `.1`, …) directly. Transmittance or absorbance, guessed per file and switchable. Any number of spectra at once. |
+| **Fit Voigt lines** | Sum of Voigt profiles fitted by trust-region-reflective least squares. Bounds on the Gaussian and Lorentzian widths, optional fixed positions/widths, optional constant or linear baseline, robust loss functions. |
+| **Starting lines** | Load a `par0` file, detect peaks automatically, or click on the plot to add lines. Edit them in a table; save them back as `par0`. |
 | **Use your instrument line shape** | Load a measured ILS (e.g. LINEFIT's `ILS_LINEFIT.txt`), build one from LINEFIT modulation/phase parameters (`ilsparms.dat`), or use a synthetic sinc (max OPD) or Gaussian (FWHM). |
 | **Deconvolve by fitting** | *Fit Voigt * ILS*: the Voigt model is convolved with the ILS before it is compared with the data, so the fitted lines **are** the deconvolved spectrum, with parameter and area uncertainties. |
-| **Deconvolve directly** | Model-free: regularised (Wiener, λ = 1e-4 by default) Fourier deconvolution with optional apodisation, Richardson–Lucy iteration, or the 2020 MATLAB algorithm reproduced exactly. |
+| **Deconvolve directly** | Model-free: regularised (Wiener, λ = 1e-4 by default) Fourier deconvolution with optional apodisation, Richardson–Lucy iteration, or the legacy 2020 algorithm. |
 | **Integrate areas** | Analytic Voigt line areas with uncertainties propagated through the full covariance (GUM matrix method); trapezoidal ∫A dν of measured, fitted and deconvolved spectra; equivalent width ∫(1−T) dν. |
 | **Compare spectra** | Area of each spectrum, ratio and % difference to a chosen reference (with propagated uncertainty), overlay plot, CSV export. Batch "Deconvolve all" and "Fit all". |
-| **Concentration (ppm)** | *Concentration* tab: integrated Beer–Lambert law ∫A dν (base e) = S(T)·N·L with N_total = P/(k_B T). S(296 K) typed in or summed from a HITRAN line list (`.par` or CSV), temperature-corrected with E″ and Q(296)/Q(T); log₁₀ areas converted to ln automatically; uncertainty budget from the area, S, L, P and T. |
 | **Export** | Results as CSV/JSON, fitted and deconvolved curves as text columns, plots as PNG/SVG/PDF (300 dpi). |
 
 ## Installation
@@ -89,7 +60,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Dependencies: numpy, scipy, matplotlib, PyQt5.
+Dependencies: numpy, scipy, matplotlib and PyQt5.
 
 ## Quick start
 
@@ -127,9 +98,7 @@ Start-up** switches it off.
    and the equivalent-width self-check.
 7. **Copy to all spectra** (Peaks tab), then **Compare → Fit all / Deconvolve all**,
    then **Compare** to get the area table and ratios against the reference.
-8. **Concentration** tab: enter L, T, P and S(296) (or **Load HITRAN…**), choose the area,
-   **Compute concentration** → number density, VMR and ppm ± u per spectrum, **Export CSV…**.
-9. **File → Save Result / Export Curves / Save Plot**.
+8. **File → Save Result / Export Curves / Save Plot**.
 
 ### The plot
 
@@ -154,15 +123,15 @@ Settings are kept in `Config/voigt_settings.json`; saved results go to `Results/
 
 ## Conventions
 
-**Line parameters** (`par0`, a 4 × g matrix, as in the MATLAB code): row 1 position ν₀ (cm⁻¹),
+**Line parameters** (`par0`, a 4 × g matrix): row 1 position ν₀ (cm⁻¹),
 row 2 intensity s, row 3 Gaussian HWHM a_G, row 4 Lorentzian HWHM a_L. One line is
 
     V(ν) = s · Re w(x + iy),   x = (ν − ν₀)·√ln2 / a_G,   y = √ln2 · a_L / a_G
 
 where w is the Faddeeva function. Its area is exactly **s·√π·a_G / √ln2**.
 
-**Absorbance** is A = log₁₀(1/T) by default (as in `voigtfit_test.m`); the 2020
-deconvolution script used ln(1/T). Areas in base e are 2.3026 × those in base 10.
+**Absorbance** is A = log₁₀(1/T) by default; ln(1/T) can be chosen in Data
+Settings (the legacy 2020 deconvolution uses it). Areas in base e are 2.3026 × those in base 10.
 
 **Which area to use.** A unit-area ILS does not change the equivalent width
 ∫(1−T) dν, but it *does* reduce the integrated absorbance ∫A dν of saturated
@@ -172,7 +141,7 @@ column density, which is what you normally compare between spectra. The fitted
 at the region edges, so leave room for the line wings.
 
 **Gaussian width with and without the ILS.** *Fit Voigt* (no ILS) uses the
-`fit2voigt.m` bounds 0.0104–0.0105 cm⁻¹: there the Gaussian also has to stand
+bounds 0.0104–0.0105 cm⁻¹: there the Gaussian also has to stand
 in for the instrument. *Fit Voigt * ILS* fixes the Gaussian at the Doppler HWHM
 ν₀·√(2 ln2 kT / mc²), about 0.0021 cm⁻¹ for N₂O at 296 K, because the
 instrument is already in the ILS; using the 0.0105 bound there counts the
@@ -189,17 +158,9 @@ in force during the measurement, are the likely causes.
 
 **The ILS** is normalised to unit area and centred at its maximum before use. The
 convolution acts on the transmittance by default (exact for deep lines);
-convolving the absorbance (`fadderiv.m`'s approach) is available as the weak-line
+convolving the absorbance is available as the weak-line
 approximation. Spectra should be on a near-uniform grid with spacing well below
 the ILS FWHM.
-
-**Concentration.** ∫A dν must be in base e (ln I₀/I); the tab multiplies a log₁₀ area
-by ln 10 itself. The line intensity must cover the same lines as the area: with the
-analytic area of the fitted lines use HITRAN lines *matched to the fitted positions*;
-with an area integrated over the region use *all lines in the region*. HITRAN S
-includes the natural isotopic abundance. Away from 296 K, S(T) uses E″ and the
-partition-function ratio: the (296/T)ⁿ power law is approximate, so enter Q(296)/Q(T)
-from the HITRAN q-files for accurate work.
 
 **Uncertainties** come from s²(JᵀJ)⁻¹ at the solution and describe the noise of
 that fit, not systematic errors in the ILS or the baseline.
@@ -208,18 +169,15 @@ that fit, not systematic errors in the ILS or the baseline.
 
 ```
 Voigt_GUI.py           the desktop application (PyQt5)
-voigt_core.py          Faddeeva function (port of fadf.m), Voigt profile, areas, widths
-voigt_fit.py           fit2voigt (port of fit2voigt.m) and the general fitter fit_voigt,
-                       peak detection, uncertainties
-ils.py                 ILS sampling and convolution, LINEFIT/sinc/Gaussian ILS,
-                       ports of ils_conv.m, fadderiv.m and fft_ils.m
-deconvolution.py       Fourier (Wiener), Richardson–Lucy, and the 2020 algorithm
-                       (port of deconvolution_code_200909.m)
+voigt_core.py          Faddeeva function, Voigt profile, areas, widths
+voigt_fit.py           fit2voigt and the general fitter fit_voigt, peak detection,
+                       uncertainties
+ils.py                 ILS sampling and convolution, LINEFIT/sinc/Gaussian ILS
+deconvolution.py       Fourier (Wiener), Richardson–Lucy, and the legacy 2020 algorithm
 area_compare.py        area integration and comparison between spectra
-concentration.py       area -> number density -> ppm (Beer-Lambert, HITRAN S(T), ideal gas)
 spectrum_io.py         text and Bruker OPUS readers, ILS and par0 files
-voigtfit_test.py       port of voigtfit_test.m (script, matplotlib figure)
-deconvolution_test.py  port of deconvolution_code_200909.m's six-panel figure
+voigtfit_test.py       example script: Voigt fit of the example spectrum (matplotlib figure)
+deconvolution_test.py  example script: six-panel deconvolution figure
 requirements.txt
 GUI.png, docs/         screenshots used in this README
 Input/
@@ -232,11 +190,9 @@ Input/
 
 The modules depend on each other in one direction:
 `spectrum_io`, `voigt_core` → `ils` → `voigt_fit`, `deconvolution` → `area_compare` → `Voigt_GUI`.
-`concentration` needs only numpy, and `Voigt_GUI` uses it.
 Each can be used on its own from Python, e.g.
 
 ```python
-import numpy as np
 from spectrum_io import load_spectrum, load_ils, load_par0, to_absorbance
 from voigt_fit import fit_voigt
 
@@ -246,28 +202,20 @@ m = (sp.x > 2216.5) & (sp.x < 2219)
 r = fit_voigt(sp.x[m], to_absorbance(sp.y[m]), load_par0("Input/par0_test.txt"),
               {"use_ils": True}, ils=ils)
 print(r["total_area"], "+-", r["total_area_err"])
-
-import concentration as conc
-area_e = conc.to_base_e(r["total_area"], "10")              # log10 area -> ln area
-S_T = conc.line_strength_T(1.35e-19, 0.0, 2217.75, 296.0)   # S(296), E", v0, T
-c = conc.concentration(area_e, S_T, L_cm=200.0, T=296.0, P_pa=101325.0,
-                       area_err=conc.to_base_e(r["total_area_err"], "10"))
-print(c["ppm"], "+-", c["ppm_err"], "ppm")
 ```
 
 ## Self-test
 
-`python Voigt_GUI.py --selftest` checks the Faddeeva port against
+`python Voigt_GUI.py --selftest` checks the Faddeeva function against
 `scipy.special.wofz` (agreement ~1e-14), the analytic area, recovery of known lines
 from a synthetic spectrum blurred by an ILS (area recovered within 0.1 σ), the
 direct deconvolution (within 0.05 % of the true area, equivalent width conserved),
-the example data, and a concentration round trip (known ppm → area → ppm at 310 K).
+the example data, and Doppler-limited synthetic lines seen through the real ILS
+(fit and direct deconvolution against the true area).
 
 ## Credits
 
-* Faddeeva function: S. M. Abrarov and B. M. Quine, York University (`fadf.m`).
-* `fit2voigt.m`: M. Ruzi, La Trobe Institute for Molecular Sciences, La Trobe University.
+* Faddeeva function: S. M. Abrarov and B. M. Quine, York University.
+* Voigt fitting (`fit2voigt`): M. Ruzi, La Trobe Institute for Molecular Sciences, La Trobe University.
 * If you find this source code useful, please feel free to use it. If you do, please remember to cite the following paper:
-  Trisna, B. A., Park, S., Park, I., Lee, J., & Lim, J. S. (2023). Measurement report: Radiative efficiencies of \(\text{(CF}_3\text{)}_2\text{CFCN}\), CF₃OCFCF₂, and CF₃OCF₂CF₃. Atmospheric Chemistry and Physics, 23(8), 4489–4500. https://acp.copernicus.org/articles/23/4489/2023/acp-23-4489-2023.pdf
-
-
+  Trisna, B. A., Park, S., Park, I., Lee, J., & Lim, J. S. (2023). Measurement report: Radiative efficiencies of (CF₃)₂CFCN, CF₃OCFCF₂, and CF₃OCF₂CF₃. Atmospheric Chemistry and Physics, 23(8), 4489–4500. https://acp.copernicus.org/articles/23/4489/2023/acp-23-4489-2023.pdf
