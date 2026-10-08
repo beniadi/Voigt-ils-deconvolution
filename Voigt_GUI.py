@@ -62,20 +62,22 @@ import numpy as np
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QFileDialog, QGridLayout, QMenuBar, QAction, QMessageBox, QSpinBox, QComboBox,
-    QCheckBox, QSizePolicy, QTabWidget, QTextEdit, QTableWidget, QTableWidgetItem, QListWidget,
-    QListWidgetItem, QHeaderView, QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout,
+    QCheckBox, QTabWidget, QTextEdit, QTableWidget, QTableWidgetItem, QListWidget,
+    QListWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QFormLayout,
     QDoubleSpinBox, QInputDialog)
 from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
-
-import matplotlib
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+# The look (stylesheet, publication-style plots without a toolbar) and the
+# plumbing shared with the other GUIs of the family.
+from gui_common import (STYLESHEET, PlotCanvas, JobWorker, style_axes, pub_axes,  # noqa: E402
+                        pub_legend, pub_figure, pub_savefig, fmt, config_dir, results_dir,
+                        style_table, table_cell, SERIES_COLOURS, INK_MUTED, C_DATA, C_FIT,
+                        C_DECONV, C_RESID, C_REGION, PUB_LW, PUB_FIT_LW, PUB_LABEL)
 import voigt_core as vc                                     # noqa: E402
 import spectrum_io as sio                                   # noqa: E402
 import ils as ils_mod                                       # noqa: E402
@@ -86,14 +88,7 @@ import area_compare as acmp                                 # noqa: E402
 APP_TITLE = "Voigt Fit 1.0"
 WIN_W, WIN_H = 1440, 940
 _trapz = getattr(np, "trapezoid", None) or np.trapz
-
-# Same reference palette as Alignment_GUI.py, assigned in fixed order.
-SERIES_COLOURS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
-                  "#7b61c9", "#3fb6c6", "#a36a3d")
-SERIES_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*")
-INK_PRIMARY, INK_SECONDARY, INK_MUTED = "#0b0b0b", "#52514e", "#8a8983"
-GRID_INK, SURFACE = "#e6e6e3", "#ffffff"
-C_DATA, C_FIT, C_DECONV, C_RESID, C_REGION = "#2a78d6", "#eb6834", "#1baf7a", "#52514e", "#dbeafe"
+C_DIRECT = "#9467bd"                       # tab10 purple: direct deconvolution, ILS
 
 AREA_SOURCES = (("deconv", "Deconvolved ∫A dν (direct deconvolution)"),
                 ("fit_analytic", "Fitted lines, analytic Σ area (Voigt * ILS fit)"),
@@ -109,9 +104,6 @@ DECONV_METHODS = (("fourier", "Fourier (Wiener-regularised)"),
                   ("legacy", "Legacy (2020 algorithm)"))
 
 
-def ensure_dir(p): os.makedirs(p, exist_ok=True); return p
-def config_dir():  return ensure_dir(os.path.join(HERE, "Config"))
-def results_dir(): return ensure_dir(os.path.join(HERE, "Results"))
 def settings_path(): return os.path.join(config_dir(), "voigt_settings.json")
 
 
@@ -214,16 +206,6 @@ def deconv_options(s):
             "ils_centre": s["ils_centre"]}
 
 
-def fmt(v, err=None, digits=6):
-    """'1.2345e-02 ± 3.1e-04', or '—' for nothing."""
-    if v is None or (isinstance(v, float) and math.isnan(v)):
-        return "—"
-    s = "%.*g" % (digits, v)
-    if err is not None and not (isinstance(err, float) and math.isnan(err)):
-        s += " ± %.2g" % err
-    return s
-
-
 # =============================================================================
 # One loaded spectrum and what has been done to it
 # =============================================================================
@@ -279,74 +261,12 @@ class FitWorker(QThread):
         self.done.emit(st, r)
 
 
-class DeconvWorker(QThread):
-    done = pyqtSignal(object, object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, jobs, parent=None):
-        """jobs: list of (state, callable returning the result dict)."""
-        super().__init__(parent)
-        self._jobs = jobs
-
-    def run(self):
-        for st, job in self._jobs:
-            t = time.perf_counter()
-            try:
-                r = job()
-            except Exception as e:
-                self.failed.emit("%s: %s: %s" % (st.name, type(e).__name__, e)); continue
-            r["elapsed_s"] = time.perf_counter() - t
-            self.done.emit(st, r)
-
-
 # =============================================================================
-# The plots
+# The plots - the publication style of gui_common (7/6 pt, full frame, grid,
+# framed legend, 120 dpi), no matplotlib toolbar: scroll zooms the wavenumber
+# axis, a left drag pans it, a double click returns to the region.
 # =============================================================================
-def style_axes(ax, base_font=9.0):
-    ax.set_facecolor(SURFACE)
-    ax.grid(True, color=GRID_INK, linewidth=0.8)
-    ax.set_axisbelow(True)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(GRID_INK); ax.spines[side].set_linewidth(0.8)
-    ax.tick_params(labelsize=base_font, colors=INK_SECONDARY, length=3, width=0.8)
-    ax.xaxis.label.set_color(INK_PRIMARY); ax.yaxis.label.set_color(INK_PRIMARY)
-    ax.ticklabel_format(useOffset=False, axis="x")
-
-
-def legend(ax, base_font=9.0, loc="best"):
-    h, l = ax.get_legend_handles_labels()
-    if not h:
-        return
-    leg = ax.legend(loc=loc, fontsize=base_font - 0.5, frameon=True, framealpha=1.0,
-                    edgecolor=GRID_INK, facecolor=SURFACE, handlelength=1.8)
-    for t in leg.get_texts():
-        t.set_color(INK_SECONDARY)
-
-
-class PlotCanvas(QWidget):
-    """A matplotlib figure with the standard zoom/pan toolbar."""
-
-    def __init__(self, height_in=4.0, toolbar=True, parent=None):
-        super().__init__(parent)
-        # constrained layout is recomputed at every draw, so the axes always
-        # fill the canvas at its current size (tight_layout ran once, too early)
-        self.fig = Figure(figsize=(6, height_in), dpi=100, facecolor=SURFACE, layout="constrained")
-        self.canvas = FigureCanvasQTAgg(self.fig)
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        v = QVBoxLayout(self); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(2)
-        if toolbar:
-            self.toolbar = NavigationToolbar2QT(self.canvas, self)
-            self.toolbar.setStyleSheet("QToolBar { background: #ffffff; border: none; }")
-            v.addWidget(self.toolbar)
-        v.addWidget(self.canvas, 1)
-
-    def draw(self):
-        self.canvas.draw_idle()
-
-
-def build_main_figure(fig, st, region, show, ymode, base, base_font=9.0, keep_xlim=None):
+def build_main_figure(fig, st, region, show, ymode, base, keep_xlim=None):
     """Up to three panels sharing one wavenumber axis, top to bottom:
 
         measured   the data, the fit (as measured - convolved if the ILS was
@@ -375,15 +295,15 @@ def build_main_figure(fig, st, region, show, ymode, base, base_font=9.0, keep_xl
     axr = axes[1] if have_resid else None
     axd = axes[-1] if have_dec else None
     for a in axes:
-        style_axes(a, base_font)
+        style_axes(a)
     if st is None:
         ax.text(0.5, 0.5, "File → Open Spectrum to begin", transform=ax.transAxes,
-                ha="center", va="center", fontsize=base_font + 2, color=INK_MUTED)
+                ha="center", va="center", fontsize=PUB_LABEL + 1, color=INK_MUTED)
         return ax, axr, axd
 
     sp = st.spec
     absorb = ymode == "absorbance"
-    ylab = ("absorbance (log%s)" % ("₁₀" if str(base) == "10" else " e")) if absorb else "transmittance"
+    ylab = ("Absorbance, log%s [-]" % ("₁₀" if str(base) == "10" else " e")) if absorb else "Transmittance [-]"
 
     def conv(A):                              # absorbance -> what is shown
         return A if absorb else sio.to_transmittance(A, base)
@@ -397,49 +317,48 @@ def build_main_figure(fig, st, region, show, ymode, base, base_font=9.0, keep_xl
         for a in axes:
             a.axvspan(region[0], region[1], color=C_REGION, alpha=0.45, lw=0, zorder=0)
     if show.get("data", True):
-        ax.plot(sp.x, y_show, color=C_DATA, lw=1.2, label="measured", zorder=3)
+        ax.plot(sp.x, y_show, color=C_DATA, lw=PUB_LW, label="Measured", zorder=3)
     if fit is not None:
         if show.get("fit", True):
-            lab = "fit (Voigt * ILS, as measured)" if fit["use_ils"] else "fit (Voigt)"
-            ax.plot(fit["x"], conv(fit["fit"]), color=C_FIT, lw=1.6, label=lab, zorder=4)
+            lab = "Fit (Voigt * ILS, as measured)" if fit["use_ils"] else "Fit (Voigt)"
+            ax.plot(fit["x"], conv(fit["fit"]), color=C_FIT, lw=PUB_FIT_LW, label=lab, zorder=4)
         if show.get("components") and absorb:
             for i in range(fit["components"].shape[1]):
                 ax.plot(fit["x"], fit["components"][:, i] + fit["baseline"],
-                        color=SERIES_COLOURS[(i + 3) % len(SERIES_COLOURS)], lw=0.9,
-                        ls="--", zorder=2, label="line %d" % (i + 1) if i < 8 else None)
+                        color=SERIES_COLOURS[(i + 2) % len(SERIES_COLOURS)], lw=0.8,
+                        ls="--", zorder=2, label="Line %d" % (i + 1) if i < 8 else None)
     for v0 in (st.par0[0] if st.par0.size else []):
         ax.axvline(v0, color=INK_MUTED, lw=0.7, ls=":", zorder=1)
-    ax.set_ylabel(ylab, fontsize=base_font + 1)
-    ax.set_title("measured", loc="left", fontsize=base_font, color=INK_SECONDARY, pad=3)
-    legend(ax, base_font, loc="upper right" if absorb else "lower right")
+    pub_axes(ax, ylabel=ylab)
+    ax.set_title("Measured", loc="left", fontsize=PUB_LABEL, pad=2)
+    pub_legend(ax, loc="upper right" if absorb else "lower right")
 
     # -- residual ------------------------------------------------------------
     if axr is not None:
-        axr.plot(fit["x"], fit["residual"], color=C_RESID, lw=0.9)
-        axr.axhline(0, color=INK_MUTED, lw=0.8)
-        axr.set_ylabel("data − fit", fontsize=base_font)
+        axr.plot(fit["x"], fit["residual"], color=C_RESID, lw=PUB_FIT_LW)
+        axr.axhline(0, color=INK_MUTED, lw=0.7)
+        pub_axes(axr, ylabel="Data − fit [-]")
 
     # -- deconvolved ---------------------------------------------------------
     if axd is not None:
         if fit is not None and fit["use_ils"]:
             xf = fit.get("x_fine", fit["x"])
             yf = fit.get("intrinsic_fine", fit["intrinsic"]) + np.interp(xf, fit["x"], fit["baseline"])
-            axd.plot(xf, conv(yf), color=C_DECONV, lw=1.5,
-                     label="fitted intrinsic lines   area %s" % fmt(fit["total_area"],
-                                                                    fit["total_area_err"], 5),
+            axd.plot(xf, conv(yf), color=C_DECONV, lw=PUB_LW,
+                     label="Fitted intrinsic lines, area %s" % fmt(fit["total_area"],
+                                                                   fit["total_area_err"], 5),
                      zorder=4)
         if d is not None:
-            axd.plot(d["x"], d["A0"] if absorb else d["T0"], color="#7b61c9", lw=1.3,
-                     label="direct deconvolution (%s)   ∫ %s" % (d["method"], fmt(d["area_deconv"], digits=5)),
+            axd.plot(d["x"], d["A0"] if absorb else d["T0"], color=C_DIRECT, lw=PUB_FIT_LW,
+                     label="Direct deconvolution (%s), ∫ %s" % (d["method"], fmt(d["area_deconv"], digits=5)),
                      zorder=3)
-        axd.set_ylabel(ylab, fontsize=base_font + 1)
-        axd.set_title("deconvolved (ILS removed)", loc="left", fontsize=base_font,
-                      color=INK_SECONDARY, pad=3)
-        legend(axd, base_font, loc="upper right" if absorb else "lower right")
+        pub_axes(axd, ylabel=ylab)
+        axd.set_title("Deconvolved (ILS removed)", loc="left", fontsize=PUB_LABEL, pad=2)
+        pub_legend(axd, loc="upper right" if absorb else "lower right")
 
     for a in axes[:-1]:
         a.tick_params(labelbottom=False)
-    axes[-1].set_xlabel("wavenumber (cm⁻¹)", fontsize=base_font + 1)
+    pub_axes(axes[-1], xlabel="Wavenumber [cm⁻¹]")
     if keep_xlim is not None:
         ax.set_xlim(*keep_xlim)
     elif region is not None:
@@ -788,66 +707,7 @@ class VoigtWindow(QMainWindow):
 
     # ------------------------------------------------------------- central --
     def _build_central(self):
-        # Stylesheet lifted from Alignment_GUI.py, so the family stays one family.
-        self.setStyleSheet("""
-            QMainWindow, QDialog { background-color: #f3f5f7; }
-            QWidget { font-family: 'Arial'; font-size: 13px; color: #0f172a; }
-            QLabel { font-family: 'Arial'; font-size: 13px; color: #0f172a; }
-            QLabel[muted="true"] { color: #64748b; font-size: 12px; }
-            QLabel[cap="true"]   { color: #0f172a; font-weight: 700; }
-            QLineEdit {
-                font-family: 'Courier New'; font-size: 13px; padding: 7px 10px;
-                border: 1px solid #d7dee8; border-radius: 10px; background-color: #fff; color: #0f172a;
-            }
-            QLineEdit:focus { border: 1px solid #3b82f6; background-color: #eff6ff; }
-            QSpinBox, QDoubleSpinBox, QComboBox {
-                font-family: 'Arial'; font-size: 13px; padding: 6px 8px;
-                border: 1px solid #d7dee8; border-radius: 10px; background-color: #fff; color: #0f172a;
-            }
-            QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 1px solid #3b82f6; }
-            QTextEdit {
-                background: #f7fafc; border: 1px solid #dde3ea;
-                border-radius: 8px; padding: 8px; font-size: 12px; color: #334155;
-            }
-            QListWidget {
-                background: #ffffff; border: 1px solid #dde3ea; border-radius: 8px; padding: 4px;
-            }
-            QListWidget::item:selected { background: #dbeafe; color: #1e3a8a; }
-            QPushButton {
-                font-family: 'Arial'; font-size: 13px; font-weight: 750; padding: 6px 14px;
-                border: none; border-radius: 10px;
-                background-color: #3b82f6; color: white;
-            }
-            QPushButton:hover    { background-color: #2563eb; }
-            QPushButton:pressed  { background-color: #1d4ed8; }
-            QPushButton:disabled { background-color: #cbd5e1; color: #f1f5f9; }
-            QPushButton:checked  { background-color: #1d4ed8; }
-            QPushButton#secondary {
-                background-color: #eef2f7; color: #223046;
-                border: 1px solid #d7dee8;
-            }
-            QPushButton#secondary:hover { background-color: #dde6f2; }
-            QPushButton#secondary:checked { background-color: #bfdbfe; color: #1e3a8a; }
-            QGroupBox {
-                font-family: 'Arial'; font-size: 13px; font-weight: 650; color: #223046;
-                background-color: #ffffff; border: 1px solid #dde3ea;
-                border-radius: 14px; margin-top: 14px; padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin; left: 14px; padding: 2px 10px;
-                background-color: #dbeafe; color: #1e3a8a;
-                border: 1px solid #bfdbfe; border-radius: 10px;
-            }
-            QTabWidget::pane { border: 1px solid #ccc; background-color: #fff; border-radius: 4px; }
-            QTabBar::tab {
-                background-color: #e0e0e0; padding: 6px 14px; margin-right: 2px;
-                border-top-left-radius: 5px; border-top-right-radius: 5px;
-            }
-            QTabBar::tab:selected { background-color: #0078d7; color: white; }
-            QCheckBox { spacing: 6px; font-size: 13px; }
-            QMenuBar { background-color: #ffffff; }
-            QMenuBar::item:selected { background-color: #dbeafe; }
-        """)
+        self.setStyleSheet(STYLESHEET)          # gui_common: the family look
 
         c = QWidget(); self.setCentralWidget(c)
         main = QHBoxLayout(c); main.setContentsMargins(10, 10, 10, 10); main.setSpacing(10)
@@ -864,7 +724,8 @@ class VoigtWindow(QMainWindow):
     def _build_plot_box(self, parent_layout):
         box = QGroupBox("Spectrum")
         v = QVBoxLayout(box); v.setContentsMargins(12, 12, 12, 10); v.setSpacing(6)
-        self.plot = PlotCanvas(5.0)
+        self.plot = PlotCanvas(5.0, zoom_pan=True, on_change=self._on_view_changed,
+                               on_reset=self._redraw)
         self.plot.canvas.mpl_connect("button_press_event", self._on_plot_click)
         v.addWidget(self.plot, 1)
 
@@ -885,7 +746,7 @@ class VoigtWindow(QMainWindow):
         self.btn_pick = QPushButton("✚ Pick lines"); self.btn_pick.setObjectName("secondary")
         self.btn_pick.setCheckable(True)
         self.btn_pick.setToolTip("While on, a click on the plot adds a line at that wavenumber\n"
-                                 "to the Peaks table (switch the zoom/pan tool off first).")
+                                 "to the Peaks table.")
         self.btn_pick.toggled.connect(self._on_pick_toggled)
         row.addWidget(self.btn_pick)
         v.addLayout(row)
@@ -1035,7 +896,7 @@ class VoigtWindow(QMainWindow):
         v = QVBoxLayout(tab); v.setContentsMargins(8, 10, 8, 8); v.setSpacing(8)
         box = QGroupBox("Instrument line shape")
         bv = QVBoxLayout(box); bv.setContentsMargins(12, 10, 12, 10); bv.setSpacing(6)
-        self.ils_plot = PlotCanvas(2.0, toolbar=False); self.ils_plot.setMinimumHeight(170)
+        self.ils_plot = PlotCanvas(2.0); self.ils_plot.setMinimumHeight(170)
         bv.addWidget(self.ils_plot, 1)
         self.lbl_ils_stats = QLabel("—"); self.lbl_ils_stats.setProperty("muted", True)
         self.lbl_ils_stats.setWordWrap(True)
@@ -1094,7 +955,9 @@ class VoigtWindow(QMainWindow):
         self.tbl_cmp.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tbl_cmp.setMinimumHeight(130)
         v.addWidget(self.tbl_cmp)
-        self.cmp_plot = PlotCanvas(2.4, toolbar=True); self.cmp_plot.setMinimumHeight(220)
+        self.cmp_plot = PlotCanvas(2.4, zoom_pan=True, on_change=self._on_view_changed,
+                                   on_reset=self._draw_overlay)
+        self.cmp_plot.setMinimumHeight(220)
         v.addWidget(self.cmp_plot, 1)
         row = QHBoxLayout()
         b = QPushButton("Compare"); b.clicked.connect(self.compare); row.addWidget(b)
@@ -1118,38 +981,13 @@ class VoigtWindow(QMainWindow):
         b.clicked.connect(self.txt_log.clear); brow.addWidget(b)
         lv.addLayout(brow)
 
-    def _style_table(self, t, editable=False):
-        t.verticalHeader().setVisible(False)
-        h = t.horizontalHeader()
-        for c in range(t.columnCount()):
-            h.setSectionResizeMode(c, QHeaderView.Stretch)
-        if t.columnCount() > 4 and not editable:
-            h.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        if not editable:
-            t.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        t.setSelectionBehavior(QAbstractItemView.SelectRows)
-        t.setAlternatingRowColors(True); t.setShowGrid(True)
-        t.setStyleSheet("""
-            QTableWidget {
-                background-color: #ffffff; border: 1px solid #dde3ea; border-radius: 0px;
-                gridline-color: #dde3ea; alternate-background-color: #f7fafc;
-                selection-background-color: #dbeafe; selection-color: #0f172a;
-            }
-        """)
-        h.setStyleSheet("""
-            QHeaderView::section {
-                background-color: #f0f4f8; color: #475569; font-weight: 800;
-                border: none; border-right: 1px solid #dde3ea; border-bottom: 2px solid #94a3b8;
-                padding: 6px 10px; font-size: 12px;
-            }
-        """)
-        t.verticalHeader().setDefaultSectionSize(26)
+    @staticmethod
+    def _style_table(t, editable=False):
+        style_table(t, editable)
 
     @staticmethod
     def _cell(text, align=Qt.AlignCenter):
-        it = QTableWidgetItem(text); it.setTextAlignment(align)
-        f = QFont("Consolas"); f.setPointSize(9); it.setFont(f)
-        return it
+        return table_cell(text, align)
 
     # ------------------------------------------------------------- helpers --
     def log(self, msg):
@@ -1441,11 +1279,6 @@ class VoigtWindow(QMainWindow):
 
     def _on_pick_toggled(self, on):
         self._pick = on
-        if on and getattr(self.plot.toolbar, "mode", ""):
-            # leave zoom/pan, otherwise the click would zoom instead of pick
-            m = str(self.plot.toolbar.mode)
-            if "zoom" in m: self.plot.toolbar.zoom()
-            elif "pan" in m: self.plot.toolbar.pan()
         self.lbl_status.setText("Click on the plot to add lines; untoggle Pick lines when done."
                                 if on else "")
 
@@ -1522,16 +1355,16 @@ class VoigtWindow(QMainWindow):
 
     def _draw_ils(self):
         fig = self.ils_plot.fig; fig.clear()
-        ax = fig.add_subplot(111); style_axes(ax, 8.5)
+        ax = fig.add_subplot(111); style_axes(ax)
         if self._ils is None:
             ax.text(0.5, 0.5, "ILS → Load ILS File", transform=ax.transAxes, ha="center",
                     va="center", color=INK_MUTED)
         else:
             x, y = self._ils
             ax.plot(x, y / (np.trapezoid(y, x) if hasattr(np, "trapezoid") else np.trapz(y, x)),
-                    color="#7b61c9", lw=1.4)
+                    color=C_DIRECT, lw=PUB_LW)
             ax.axvline(0, color=INK_MUTED, lw=0.7)
-            ax.set_xlabel("offset (cm⁻¹)", fontsize=8.5); ax.set_ylabel("ILS (unit area)", fontsize=8.5)
+            pub_axes(ax, "Offset [cm⁻¹]", "ILS, unit area [cm]")
         self.ils_plot.draw()
 
     # -- fitting -------------------------------------------------------------
@@ -1708,7 +1541,7 @@ class VoigtWindow(QMainWindow):
             jobs.append((st, job))
         self._set_busy(True, "Deconvolving %d spectrum(s) (%s)…" % (len(jobs), opts["method"]))
         self._deconv_left = len(jobs)
-        w = self._worker = DeconvWorker(jobs, self)
+        w = self._worker = JobWorker(jobs, self)
         w.done.connect(lambda st, r, region=region: self._on_deconv_done(st, r, region))
         w.failed.connect(self._on_failed)
         w.finished.connect(self._on_deconv_finished)
@@ -1838,7 +1671,7 @@ class VoigtWindow(QMainWindow):
         key = self.combo_overlay.currentData()
         self._settings["overlay"] = key
         fig = self.cmp_plot.fig; fig.clear()
-        ax = fig.add_subplot(111); style_axes(ax, 8.5)
+        ax = fig.add_subplot(111); style_axes(ax)
         region = self.region()
         n = 0
         for i, st in enumerate([s for s in self._states if s.include]):
@@ -1851,11 +1684,11 @@ class VoigtWindow(QMainWindow):
                 x, y = st.fit["x"], st.fit["intrinsic"]
             else:
                 x, _T, y = region_data(st, region, self._settings)
-            ax.plot(x, y, color=col, lw=1.3, label=st.name)
+            ax.plot(x, y, color=col, lw=PUB_LW, label=st.name)
             n += 1
         if n:
-            legend(ax, 8.5, "upper right")
-            ax.set_xlabel("wavenumber (cm⁻¹)", fontsize=8.5); ax.set_ylabel("absorbance", fontsize=8.5)
+            pub_legend(ax, "upper right")
+            pub_axes(ax, "Wavenumber [cm⁻¹]", "Absorbance [-]")
             if region:
                 ax.set_xlim(*region)
         else:
@@ -1887,7 +1720,12 @@ class VoigtWindow(QMainWindow):
         build_main_figure(self.plot.fig, st, self.region(), show, self.combo_ymode.currentData(),
                           self._settings["base"], keep_xlim=keep)
         self.plot.draw()
-        self.plot.toolbar.update()            # the home button returns to this view
+
+    @staticmethod
+    def _on_view_changed(ax):
+        """After a scroll-zoom or drag-pan: fit y to what is now visible."""
+        for a in ax.figure.axes:
+            _autoscale_y(a)
 
     # -- files out -----------------------------------------------------------
     def _result_row(self, st):
@@ -1983,12 +1821,11 @@ class VoigtWindow(QMainWindow):
             return
         self._remember_dir("last_save_dir", path)
         try:
-            fig = Figure(figsize=(7.0, 7.0), dpi=300, facecolor=SURFACE, layout="constrained")
+            fig = pub_figure(840, 840)                       # 7 x 7 in, saved at 300 dpi
             show = {k: cb.isChecked() for k, cb in self.chk_show.items()}
             build_main_figure(fig, self.current(), self.region(), show, self.combo_ymode.currentData(),
                               self._settings["base"], keep_xlim=self.plot.fig.axes[0].get_xlim())
-            with matplotlib.rc_context({"svg.fonttype": "none", "pdf.fonttype": 42}):
-                fig.savefig(path, dpi=300, bbox_inches="tight", facecolor=SURFACE)
+            pub_savefig(fig, path, dpi=300)
         except Exception as e:
             QMessageBox.critical(self, "Save failed", "%s: %s" % (type(e).__name__, e)); return
         self.log("saved %s" % path)

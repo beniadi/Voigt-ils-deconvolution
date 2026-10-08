@@ -19,15 +19,22 @@ agreement is reported:
 The measured spectrum and the Voigt * ILS fit (top), the residual (middle) and the
 deconvolved spectrum (bottom) share one wavenumber axis:
 
-![Measured spectrum with the Voigt * ILS fit, the residual, and the deconvolved spectrum from both methods](GUI.png)
+![Measured spectrum with the Voigt * ILS fit, the residual, and the deconvolved spectrum from both methods](GUI_v2.png)
 
 The *Deconvolution* tab shows the ILS, the measured and deconvolved areas, the
 equivalent-width self-check and the fit-vs-direct agreement:
 
-![Full window with the Deconvolution tab: instrument line shape and direct-deconvolution results](docs/gui_deconvolution.png)
+![Full window with the Deconvolution tab: instrument line shape and direct-deconvolution results](docs/gui_deconvolution_v2.png)
 
 The *Compare* tab integrates the area of every loaded spectrum and reports ratios
-and differences to a reference.
+and differences to a reference:
+
+![Full window with the Compare tab: area table and overlay of the deconvolved spectra](docs/gui_compare_v2.png)
+
+The plots use the publication style of `gui_common.py` (compact 7/6 pt text,
+full frame, grid, framed legend) and have no matplotlib toolbar: scroll to zoom
+the wavenumber axis, drag with the left button to pan, double-click to return
+to the region.
 
 Check a result before trusting it:
 
@@ -91,7 +98,7 @@ Start-up** switches it off.
 
 1. **File → Open Spectrum** (several files at once is fine). Tick the ones you want to compare.
 2. **ILS → Load ILS File** (or *From LINEFIT Parameters* / *Synthetic ILS*).
-3. Set the **Region** under the plot (type it, or zoom and press *Use view*).
+3. Set the **Region** under the plot (type it, or scroll-zoom/drag the plot and press *Use view*).
 4. Get starting lines: **Detect**, **✚ Pick lines** on the plot, or **Load par0…**.
 5. **Fit Voigt * ILS** → the *Fit Result* tab shows each line ± error and the total area.
 6. **Deconvolve** → the *Deconvolution* tab shows the measured vs deconvolved area
@@ -169,6 +176,8 @@ that fit, not systematic errors in the ILS or the baseline.
 
 ```
 Voigt_GUI.py           the desktop application (PyQt5)
+gui_common.py          shared look: stylesheet, publication-style plots without toolbar,
+                       scroll-zoom/drag-pan, tables, worker thread
 voigt_core.py          Faddeeva function, Voigt profile, areas, widths
 voigt_fit.py           fit2voigt and the general fitter fit_voigt, peak detection,
                        uncertainties
@@ -179,7 +188,7 @@ spectrum_io.py         text and Bruker OPUS readers, ILS and par0 files
 voigtfit_test.py       example script: Voigt fit of the example spectrum (matplotlib figure)
 deconvolution_test.py  example script: six-panel deconvolution figure
 requirements.txt
-GUI.png, docs/         screenshots used in this README
+GUI_v2.png, docs/      screenshots used in this README
 Input/
   MP_spectrum_2.txt         N₂O multipass-cell transmittance (the example spectrum)
   NB_N2O-22_64scan-cut.txt  N₂O spectrum used by deconvolution_test.py
@@ -189,7 +198,8 @@ Input/
 ```
 
 The modules depend on each other in one direction:
-`spectrum_io`, `voigt_core` → `ils` → `voigt_fit`, `deconvolution` → `area_compare` → `Voigt_GUI`.
+`spectrum_io`, `voigt_core` → `ils` → `voigt_fit`, `deconvolution` → `area_compare` → `Voigt_GUI`
+(which also takes its look from `gui_common`).
 Each can be used on its own from Python, e.g.
 
 ```python
